@@ -13,12 +13,13 @@ def build_synchronized_video():
     print("Initializing Module 4: Synchronized Video Assembly...")
     clips = []
     
+    # UPDATED: Loops from 1 through 6
     for i in range(1, 7):
         audio_path = f"assets/voice_{i}.mp3"
         image_path = f"assets/scene_{i}.jpg"
         
         if not os.path.exists(audio_path) or not os.path.exists(image_path):
-            print(f"Error: Missing assets for scene {i}!")
+            print(f"Error: Missing assets for scene {i}! Check the assets folder.")
             return
             
         # 1. Load the exact audio for this specific scene
@@ -28,7 +29,7 @@ def build_synchronized_video():
         # 2. Load the image and set it to match the exact audio length
         base_clip = ImageClip(image_path).set_duration(scene_duration)
         
-        # 3. Apply the Ken Burns zoom to give it a GIF/Video motion feel
+        # 3. Apply the Ken Burns zoom to give it a dynamic motion feel
         def zoom_effect(t, duration=scene_duration):
             return 1 + 0.08 * (t / duration)
             
@@ -42,7 +43,7 @@ def build_synchronized_video():
         clips.append(animated_clip)
         print(f"-> Scene {i} synchronized ({scene_duration:.2f}s).")
         
-    print("\nStitching clips together into final timeline...")
+    print("\nStitching 6 clips together into final timeline...")
     final_video = concatenate_videoclips(clips, method="compose")
     
     output_filename = "final_shorts_video.mp4"
@@ -56,7 +57,7 @@ def build_synchronized_video():
         threads=4
     )
     
-    print("\nSuccess! Perfectly synced video is ready.")
+    print("\nSuccess! Perfectly synced 60-second story video is ready.")
 
 if __name__ == "__main__":
     build_synchronized_video()

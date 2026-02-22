@@ -27,8 +27,8 @@ def generate_scene_image(prompt, index):
     API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
     
-    # Enforce the kid-friendly art style automatically
-    enhanced_prompt = f"{prompt}, bright colorful educational children's book style, highly detailed"
+    # Enforce the high-end 3D animated style for your story
+    enhanced_prompt = f"{prompt}, bright colorful high-end 3D animated children's movie style, highly detailed"
     
     try:
         response = requests.post(API_URL, headers=headers, json={"inputs": enhanced_prompt})
@@ -60,11 +60,12 @@ def run_media_pipeline():
         return
     
     scenes = data.get("scenes", [])
-    if not scenes or len(scenes) != 5:
-        print("Error: Invalid script data. Expected exactly 5 scenes.")
+    # UPDATED: Now requires exactly 6 scenes for the 60-second format
+    if not scenes or len(scenes) != 6:
+        print(f"Error: Invalid script data. Expected exactly 6 scenes, found {len(scenes)}.")
         return
         
-    print("\nGenerating synchronized audio and images for 5 scenes...")
+    print("\nGenerating synchronized audio and images for 6 scenes...")
     
     # Generate Audio
     print("\n--- Generating Audio ---")
