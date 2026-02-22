@@ -13,7 +13,7 @@ def build_synchronized_video():
     print("Initializing Module 4: Synchronized Video Assembly...")
     clips = []
     
-    for i in range(1, 6):
+    for i in range(1, 7):
         audio_path = f"assets/voice_{i}.mp3"
         image_path = f"assets/scene_{i}.jpg"
         
