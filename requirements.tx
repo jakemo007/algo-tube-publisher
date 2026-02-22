@@ -1,0 +1,19 @@
+# Module 2 & 3: The Brain & Media Generation (Gemini & Veo)
+google-genai>=1.0.0
+
+# Module 1 & 5: Research & Distribution (YouTube Data API v3)
+google-api-python-client>=2.190.0
+google-auth-oauthlib
+google-auth-httplib2
+
+# Module 4: Video Assembly & Rendering
+moviepy==1.0.3
+
+# Configuration & Security (API Key management)
+python-dotenv
+pydantic
+
+edge-tts 
+asyncio
+
+pillow

@@ -205,3 +205,20 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+youtube-env/
+
+# Security
+.env
+client_secret.json
+credentials.json
+
+# Environments
+youtube-env/
+__pycache__/
+
+assets/*
+
+*.mp4
+
+*.json
