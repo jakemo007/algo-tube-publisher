@@ -1,4 +1,5 @@
 import os
+import json
 import google_auth_oauthlib.flow
 import googleapiclient.discovery
 import googleapiclient.errors
@@ -57,11 +58,30 @@ def upload_video(youtube):
 
     print("\nPreparing the video metadata...")
     
-    # Define the video's details, tags, language, and category (27 = Education)
-    # Define the video's details, tags, language, and category (27 = Education)
+    # NEW: Dynamically load the generated title from Module 2
+    try:
+        with open('script_data.json', 'r', encoding='utf-8') as f:
+            script_data = json.load(f)
+            # Grab the title, or use a safe fallback if something goes wrong
+            dynamic_title = script_data.get("title", "ZooTots Animal Adventure! 🐾")
+    except FileNotFoundError:
+        dynamic_title = "ZooTots Animal Adventure! 🐾"
+
+    # Clean up the title and strictly enforce the #shorts tag for the algorithm
+    dynamic_title = dynamic_title.strip()
+    if "#shorts" not in dynamic_title.lower():
+        dynamic_title = f"{dynamic_title} #shorts"
+        
+    # YouTube has a strict 100-character limit for titles
+    if len(dynamic_title) > 100:
+        dynamic_title = dynamic_title[:89] + "... #shorts"
+
+    print(f"Using Title: {dynamic_title}")
+
+    # Define the video's details, tags, language, and category
     request_body = {
         "snippet": {
-            "title": "Fascinating Animal Facts for Toddlers! 🦁✨ #shorts",
+            "title": dynamic_title,  # Using the dynamic title here!
             "description": "Fun, fast, and educational animal facts for curious kids! 🐯📚\n\nAt ZooTots, we turn wildlife education into an adventure. Our kid-friendly Shorts are designed to grab your toddler's attention with bright colors and teach them amazing things about the animal kingdom.\n\n🌟 New educational Shorts every day.\n✅ Safe, fun, and parent-approved!\n\nSubscribe to join our little explorer family today! #education #animals #toddlers #shorts\n\n© 2026 ZooTots. All rights reserved.",
             "tags": ["shorts", "toddlers", "education", "animals", "kids", "zootots"],
             "categoryId": "27",
@@ -71,14 +91,13 @@ def upload_video(youtube):
         "status": {
             "privacyStatus": "public", 
             "selfDeclaredMadeForKids": True,
-            "license": "youtube" # Explicitly sets the Standard YouTube License for copyright protection
+            "license": "youtube" 
         }
     }
 
-    # Attach the physical MP4 file
     media_file = MediaFileUpload(video_path, chunksize=-1, resumable=True)
 
-    print(f"Uploading '{video_path}' to YouTube (this may take a minute depending on your internet speed)...")
+    print(f"Uploading '{video_path}' to YouTube...")
     
     try:
         request = youtube.videos().insert(
