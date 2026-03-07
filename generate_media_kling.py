@@ -1,10 +1,11 @@
-# generate_media_luma.py
+# generate_media.py
 # ─────────────────────────────────────────────────────────────────────────────
-# PREMIUM LUMA PIPELINE (Using up the remaining $20 credit):
-# 1. FLUX generates a 3D Pixar-style character reference image.
+# 2D ANIME PIPELINE (KLING AI):
+# 1. FLUX generates a 2D Anime style character reference image.
 # 2. ImgBB hosts the image.
 # 3. ElevenLabs generates the voiceover.
-# 4. Luma ray-2 (Image-to-Video) generates 2 cinematic clips per scene.
+# 4. Kling AI (v1.5 Standard) takes the image and animates it with heavy anime 
+#    action prompts to create a high-retention, cinematic mini-movie.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import base64
@@ -17,7 +18,6 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 from elevenlabs.client import ElevenLabs
-from lumaai import LumaAI
 
 from config import (
     ASSETS_DIR,
@@ -32,11 +32,6 @@ from config import (
     IMGBB_UPLOAD_URL,
     LOG_FILE,
     LOG_LEVEL,
-    LUMA_CLIPS_PER_SCENE, # Ensure this is set to 2 in config.py
-    LUMA_MAX_POLL_ATTEMPTS,
-    LUMA_MODEL, # Ensure this is "ray-2" in config.py
-    LUMA_POLL_INTERVAL,
-    LUMA_TIMEOUT_SECONDS,
     RAG_BYPASS_CACHE,
     SCRIPT_FILE,
 )
@@ -47,6 +42,11 @@ from drive_client import (
     upload_file,
 )
 from rag_database import ingest_new_video, search_video_cache
+
+# We use 2 clips per scene for that fast-paced cinematic editing
+KLING_CLIPS_PER_SCENE = 2
+KLING_POLL_INTERVAL = 10
+KLING_TIMEOUT_SECONDS = 600 # Kling can take slightly longer than Luma
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.DEBUG),
@@ -67,12 +67,12 @@ def _require_env(key: str) -> str:
     return value
 
 HF_API_KEY: str         = _require_env("HUGGINGFACE_API_KEY")
-LUMA_API_KEY: str       = _require_env("LUMA_API_KEY")
 IMGBB_API_KEY: str      = _require_env("IMGBB_API_KEY")
 ELEVENLABS_API_KEY: str = _require_env("ELEVENLABS_API_KEY")
+KLING_API_KEY: str      = _require_env("KLING_API_KEY") # Add this to your .env file!
 
 eleven_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-luma_client   = LumaAI(auth_token=LUMA_API_KEY)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Checkpoint helpers
@@ -82,7 +82,8 @@ def _load_checkpoint() -> dict:
         return {}
     try:
         with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        return data
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -100,23 +101,21 @@ def _clear_checkpoint() -> None:
     except OSError:
         pass
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# FLUX character image (Turnaround Sheet - VIBRANT KID-FRIENDLY VERSION)
+# FLUX: 2D Anime Image Generator
 # ─────────────────────────────────────────────────────────────────────────────
-def generate_character_image(character_design: str) -> bool:
-    logger.info("Generating VIBRANT 2D anime style character turnaround sheet…")
+def generate_character_image(character_design: str, character_setting: str) -> bool:
+    logger.info("Generating FLUX 2D Anime character reference image…")
     
-    # IMPROVEMENT: Removed "white background." Replaced with colorful, 
-    # simple, non-cluttered magic.
+    # We aggressively force the 2D Anime style here so Kling knows what to animate
+    anime_suffix = "High quality 2D anime style, Studio Ghibli, flat colors, clean cel-shaded outlines, vibrant anime lighting, colorful illustration."
+    
     flux_prompt = (
-        "Professional animation studio character turnaround sheet. "
-        "The exact same character shown in three distinct views arranged horizontally: "
-        "1. front view, 2. 3/4 view, 3. side profile view. "
-        f"Character: {character_design}. "
-        "High-end 2D animated feature film style, extremely cute and appealing design, " # ⬅️ Changed here
-        "big expressive cinematic eyes, perfect proportions, highly detailed fur or skin textures, "
-        "smooth 2D rendering. Bright vibrant cinematic lighting, pure white studio background, "
-        "8k render, masterpiece."
+        f"{character_design}, "
+        f"{character_setting}. "
+        "Character centered in frame, full body visible. "
+        f"{anime_suffix}"
     )
     logger.debug("FLUX prompt: %s", flux_prompt[:180])
 
@@ -134,20 +133,15 @@ def generate_character_image(character_design: str) -> bool:
             if response.status_code == 200:
                 with open(CHARACTER_IMAGE_PATH, "wb") as f:
                     f.write(response.content)
-                logger.info("Vibrant character turnaround sheet saved: %s", CHARACTER_IMAGE_PATH)
+                logger.info("Character image saved: %s", CHARACTER_IMAGE_PATH)
                 return True
-            logger.warning(
-                "HF HTTP %d (attempt %d/%d). Retrying in %ds…",
-                response.status_code, attempt, HF_MAX_RETRIES, HF_RETRY_SLEEP,
-            )
         except requests.RequestException:
             logger.exception("HF request error (attempt %d/%d).", attempt, HF_MAX_RETRIES)
         time.sleep(HF_RETRY_SLEEP)
-
     return False
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ImgBB upload
+# ImgBB upload (Required for Kling)
 # ─────────────────────────────────────────────────────────────────────────────
 def upload_to_imgbb(image_path: str) -> str | None:
     logger.info("Uploading reference image to ImgBB…")
@@ -189,47 +183,52 @@ def generate_scene_audio(text: str, index: int) -> bool:
         logger.exception("Scene %d — ElevenLabs failed.", index)
         return False
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Luma prompt builders (Optimized for ray-2 Image-to-Video)
+# Kling AI API Wrapper & Prompt Builders
 # ─────────────────────────────────────────────────────────────────────────────
+
 _CAMERA_PROGRESSIONS: list[tuple[str, str]] = [
-    ("fast zoom in shot", "fast low-angle hero shot"),
-    ("sudden close-up shot", "dynamic tracking shot following action"),
+    ("fast zoom in shot, action lines", "dynamic low-angle hero shot"),
+    ("sudden close-up shot, intense anime eyes", "fast tracking shot following action"),
     ("fast panning action shot", "whip pan to character close-up"),
     ("dutch angle dramatic shot", "fast aerial overhead shot"),
 ]
 
-def _build_luma_prompts(
+def _build_kling_prompts(
     scene_action: str,
     scene_environment: str,
     scene_index: int,
 ) -> tuple[str, str]:
-    
+    """
+    Builds two distinct prompts for Kling to generate a cinematic A/B cut.
+    Forces 2D anime styling.
+    """
     cam_a, cam_b = _CAMERA_PROGRESSIONS[(scene_index - 1) % len(_CAMERA_PROGRESSIONS)]
 
     base = (
-        "Premium 8k 2D animation, high-end studio cartoon quality. " # ⬅️ Changed here
-        "HIGH SPEED MOTION, very fast physics, rapid movement. Do NOT generate slow motion. "
+        "2D Anime style animation, Studio Ghibli aesthetic, flat colors, clean lines. "
+        "HIGH SPEED MOTION, fluid anime physics. "
     )
 
     prompt_a = (
         f"{base}"
         f"Camera: {cam_a}. "
-        f"Action: The character is {scene_action}. "
+        f"Action: {scene_action}. "
         f"Environment: {scene_environment}. "
-        "The character moves instantly and quickly with exaggerated, energetic animation. "
+        "Exaggerated, energetic anime movement."
     )
 
+    # Evolve the action for the second clip
     continuation_actions = {
-        "jump": "rapidly bouncing like a spring, jumping very high and fast",
-        "spin": "spinning extremely fast like a tornado",
-        "run": "sprinting forward at high speed, blur effect",
-        "gasp": "suddenly freezing with huge eyes, fast full body shiver",
-        "hug": "squeezing tightly while rapidly shaking with joy",
-        "wave": "frantically waving both arms back and forth at high speed",
+        "jump": "mid-air freeze frame before landing explosively",
+        "spin": "spinning with anime speed lines surrounding them",
+        "run": "sprinting forward, leaving a dust cloud behind",
+        "gasp": "huge sweat drop on forehead, extremely shocked anime expression",
+        "hug": "crying waterfalls of happy anime tears",
     }
     
-    cont_action = "rapidly bouncing and moving at high speed, full of fast energy"
+    cont_action = "moving dynamically through the scene with fast anime physics"
     action_lower = scene_action.lower()
     for stem, replacement in continuation_actions.items():
         if stem in action_lower:
@@ -239,67 +238,83 @@ def _build_luma_prompts(
     prompt_b = (
         f"{base}"
         f"Camera: {cam_b}. "
-        f"Action: The character is {cont_action}. "
+        f"Action: {cont_action}. "
         f"Environment: {scene_environment}. "
-        "High speed action, very fast, highly energetic 3D movement."
     )
 
     return prompt_a, prompt_b
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PREMIUM Luma video generator (PURE TEXT-TO-VIDEO)
-# ─────────────────────────────────────────────────────────────────────────────
-def generate_luma_video(luma_prompt: str, frame0_url: str, video_path: str) -> bool:
-    logger.info("Submitting PREMIUM Luma generation (model=%s)…", LUMA_MODEL)
+def generate_kling_video(prompt: str, image_url: str, video_path: str) -> bool:
+    """
+    Custom REST wrapper for the Kling AI v1.5 Standard API.
+    Costs ~$0.10 per clip instead of Luma's $0.32.
+    """
+    logger.info("Submitting generation to Kling AI (v1.5 Standard)…")
+    
+    headers = {
+        "Authorization": f"Bearer {KLING_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    # 1. Submit the Task
+    submit_url = "https://api.klingai.com/v1/videos/image2video"
+    payload = {
+        "model_name": "kling-v1-5", # Standard v1.5 model
+        "prompt": prompt,
+        "image": image_url,
+        "duration": 5, # 5 second clips
+    }
     
     try:
-        # ⚠️ CRITICAL FIX: Removed the frame0 keyframe! 
-        # This allows Luma to generate dynamic movie-like environments and actions 
-        # instead of being trapped in the white turnaround studio.
-        generation = luma_client.generations.create(
-            model=LUMA_MODEL, 
-            prompt=luma_prompt,
-            aspect_ratio="9:16" # Forces YouTube Shorts vertical formatting
-        )
-    except Exception as e:
-        logger.exception(f"Luma submission failed: {e}")
+        response = requests.post(submit_url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        task_data = response.json()
+        task_id = task_data.get("data", {}).get("task_id")
+        
+        if not task_id:
+            logger.error("Kling API rejected submission: %s", task_data)
+            return False
+            
+        logger.info("Kling task submitted (id=%s). Waiting for render...", task_id)
+    except requests.RequestException as e:
+        logger.error("Failed to connect to Kling API: %s", e)
         return False
 
-    deadline   = time.time() + LUMA_TIMEOUT_SECONDS
-    poll_count = 0
-
-    for attempt in range(1, LUMA_MAX_POLL_ATTEMPTS + 1):
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            logger.error("Luma timed out.")
-            return False
-
+    # 2. Poll for Completion
+    poll_url = f"https://api.klingai.com/v1/videos/image2video/{task_id}"
+    deadline = time.time() + KLING_TIMEOUT_SECONDS
+    
+    while time.time() < deadline:
         try:
-            status = luma_client.generations.get(id=generation.id)
-        except Exception:
-            time.sleep(LUMA_POLL_INTERVAL)
-            poll_count += 1
-            continue
-
-        if status.state == "completed":
-            try:
-                video_res = requests.get(status.assets.video, timeout=120)
-                video_res.raise_for_status()
-                with open(video_path, "wb") as f:
-                    f.write(video_res.content)
-                return True
-            except requests.RequestException:
+            status_res = requests.get(poll_url, headers=headers, timeout=30)
+            status_data = status_res.json()
+            state = status_data.get("data", {}).get("task_status")
+            
+            if state == "succeed":
+                # 3. Download the Video
+                video_url = status_data.get("data", {}).get("task_result", {}).get("videos", [{}])[0].get("url")
+                if video_url:
+                    logger.info("Kling render complete! Downloading...")
+                    vid_res = requests.get(video_url, timeout=120)
+                    with open(video_path, "wb") as f:
+                        f.write(vid_res.content)
+                    return True
+                else:
+                    logger.error("Kling finished but provided no video URL.")
+                    return False
+                    
+            elif state == "failed":
+                logger.error("Kling generation failed internally: %s", status_data)
                 return False
-
-        if status.state == "failed":
-            logger.error("Luma failed internally: %s", getattr(status, "failure_reason", "unknown"))
-            return False
-
-        poll_count += 1
-        time.sleep(LUMA_POLL_INTERVAL)
-
+                
+            time.sleep(KLING_POLL_INTERVAL)
+            
+        except requests.RequestException:
+            logger.warning("Kling polling error. Retrying...")
+            time.sleep(KLING_POLL_INTERVAL)
+            
+    logger.error("Kling generation timed out.")
     return False
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Scene processors
@@ -315,14 +330,15 @@ def _process_scene_video(
     scene: dict, index: int, frame0_url: str, character_design: str,
     animal: str, drive_service, animal_folder_id: str,
 ) -> bool:
+    
     scene_action      = scene.get("scene_action", "moving quickly")
     scene_environment = scene.get("scene_environment", "a colourful magical world")
     
-    cache_key = f"3D_RAY2 | {character_design} | {scene_action} | {scene_environment}"
+    cache_key = f"2D_ANIME | {character_design} | {scene_action} | {scene_environment}"
 
-    prompt_a, prompt_b = _build_luma_prompts(scene_action, scene_environment, index)
+    prompt_a, prompt_b = _build_kling_prompts(scene_action, scene_environment, index)
     clip_prompts = [prompt_a, prompt_b]
-    clip_labels  = [chr(ord("a") + i) for i in range(LUMA_CLIPS_PER_SCENE)]
+    clip_labels  = [chr(ord("a") + i) for i in range(KLING_CLIPS_PER_SCENE)]
 
     for clip_label, luma_prompt in zip(clip_labels, clip_prompts):
         clip_fname = f"scene_{index}{clip_label}.mp4"
@@ -332,7 +348,8 @@ def _process_scene_video(
             continue
 
         if clip_label == "a" and not RAG_BYPASS_CACHE:
-            search_key = cache_key if index != 6 else "3D_RAY2 | Outro | Subscribe action."
+            # Reusing Outro logic for Scene 6
+            search_key = cache_key if index != 6 else "2D_ANIME | Outro | Subscribe action."
             cache_meta = search_video_cache(search_key, animal="generic" if index == 6 else animal)
             
             if cache_meta and cache_meta.get("drive_file_id"):
@@ -344,22 +361,20 @@ def _process_scene_video(
                             shutil.copy2(clip_path, other_path)
                     return True
 
-        if not generate_luma_video(luma_prompt, frame0_url, clip_path):
+        # CALLING KLING INSTEAD OF LUMA
+        if not generate_kling_video(luma_prompt, frame0_url, clip_path):
             return False
 
         file_id = upload_file(drive_service, clip_path, animal_folder_id, clip_fname)
         
         if clip_label == "a" and file_id:
-            ingest_key = cache_key if index != 6 else "3D_RAY2 | Outro | Subscribe action."
+            ingest_key = cache_key if index != 6 else "2D_ANIME | Outro | Subscribe action."
             ingest_new_video(
                 scene_description=ingest_key,
                 drive_file_id=file_id,
                 animal="generic" if index == 6 else animal,
                 file_name=clip_fname,
             )
-
-        if clip_label != clip_labels[-1]:
-            time.sleep(10)
 
     return True
 
@@ -381,7 +396,8 @@ def run_media_pipeline() -> bool:
     Path(ASSETS_DIR).mkdir(exist_ok=True)
     data              = _load_script(SCRIPT_FILE)
     scenes            = data.get("scenes", [])
-    char_design: str  = data.get("character_design", "A cute 3D animal")
+    char_design: str  = data.get("character_design", "A cute 2D anime animal")
+    char_setting: str = data.get("character_setting", "In a beautiful anime landscape")
     animal            = _extract_animal_name(data)
     total             = len(scenes)
 
@@ -396,11 +412,12 @@ def run_media_pipeline() -> bool:
     checkpoint        = _load_checkpoint()
     completed_scenes: list[int] = checkpoint.get("completed_scenes", [])
     
+    # Restoring the FLUX image lock for consistent 2D faces!
     frame0_url: str | None = checkpoint.get("character_image_url")
 
     char_on_disk = os.path.exists(CHARACTER_IMAGE_PATH)
     if not char_on_disk:
-        if not generate_character_image(char_design):
+        if not generate_character_image(char_design, char_setting):
             return False
         frame0_url = None
         checkpoint.pop("character_image_url", None)

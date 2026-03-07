@@ -222,3 +222,13 @@ assets/*
 *.mp4
 
 *.json
+
+*.mp3
+
+test*
+
+chroma_storage/*
+
+assets/*
+
+used_animals.txt

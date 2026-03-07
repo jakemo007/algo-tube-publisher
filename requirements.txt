@@ -17,3 +17,10 @@ edge-tts
 asyncio
 
 pillow
+
+openai
+elevenlabs
+lumaai
+
+fastapi
+uvicorn
